@@ -9,9 +9,9 @@ package main
 import (
     "citron-repo/handler"
     "citron-repo/model"
+    "citron-repo/transport"
     "flag"
     "github.com/xfali/go-web-starter/config"
-    "github.com/xfali/go-web-starter/web"
 )
 
 func main() {
@@ -31,5 +31,7 @@ func main() {
     handler := handler.NewRestful(myconf)
     defer handler.Close()
 
-    web.StartupWithConf(conf, handler.Api)
+    //web.StartupWithConf(conf, handler.Api)
+    s := transport.NewServer()
+    s.ListenAndServe()
 }
