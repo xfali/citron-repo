@@ -7,6 +7,7 @@
 package client
 
 import (
+    "citron-repo/ioutil"
     "io"
     "net"
 )
@@ -34,9 +35,14 @@ func Open(addr string) *TcpClient {
 }
 
 func (c *TcpClient) Send(reader io.Reader) (int64, error) {
-    return io.Copy(c.conn, reader)
+    return ioutil.Copy(c.conn, reader)
 }
 
 func (c *TcpClient) Receive(writer io.Writer) (int64, error) {
-    return io.Copy(writer, c.conn)
+    return ioutil.Copy(writer, c.conn)
 }
+
+func (c *TcpClient) ReceiveN(writer io.Writer, length int64) (int64, error) {
+    return ioutil.CopyN(writer, c.conn, length)
+}
+

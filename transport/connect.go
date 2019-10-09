@@ -16,8 +16,7 @@ type ConnConfig struct {
     ReadBufSize  int
     WriteBufSize int
 
-    ReadChan  chan<- []byte
-    WriteChan <-chan []byte
+    factory ListenerFactory
 }
 
 type Connect struct {
@@ -25,14 +24,20 @@ type Connect struct {
     stopChan chan bool
     wait     sync.WaitGroup
 
-    conf ConnConfig
+    readChan    chan<- []byte
+    writeChan   <-chan []byte
+    readBufSize int
 }
 
 func NewConnect(conf ConnConfig, conn net.Conn) *Connect {
+    l := conf.factory()
+    r, w := l()
     ret := Connect{
-        conn:     conn,
-        stopChan: make(chan bool),
-        conf:     conf,
+        conn:        conn,
+        stopChan:    make(chan bool),
+        readBufSize: conf.ReadBufSize,
+        readChan:    r,
+        writeChan:   w,
     }
 
     return &ret
@@ -52,11 +57,11 @@ func (c *Connect) ProcessLoop() {
 
 func (c *Connect) ReadLoop() {
     defer c.wait.Done()
-    if c.conf.ReadChan == nil {
+    if c.readChan == nil {
         return
     }
 
-    data := make([]byte, c.conf.ReadBufSize)
+    data := make([]byte, c.readBufSize)
     for {
         n, err := c.conn.Read(data)
         if err != nil {
@@ -71,7 +76,7 @@ func (c *Connect) ReadLoop() {
         select {
         case <-c.stopChan:
             return
-        case c.conf.ReadChan <- data[:n]:
+        case c.readChan <- data[:n]:
             break
         }
     }
@@ -79,7 +84,7 @@ func (c *Connect) ReadLoop() {
 
 func (c *Connect) WriteLoop() {
     defer c.wait.Done()
-    if c.conf.WriteChan == nil {
+    if c.writeChan == nil {
         return
     }
     for {
@@ -87,7 +92,7 @@ func (c *Connect) WriteLoop() {
         select {
         case <-c.stopChan:
             return
-        case d = <-c.conf.WriteChan:
+        case d = <-c.writeChan:
             break
         }
 

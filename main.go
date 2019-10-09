@@ -32,6 +32,6 @@ func main() {
     defer handler.Close()
 
     //web.StartupWithConf(conf, handler.Api)
-    s := transport.NewServer()
+    s := transport.NewBinaryServer()
     s.ListenAndServe()
 }

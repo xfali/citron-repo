@@ -21,6 +21,7 @@ var (
     FileTokenMissing  = model.Result{Code: "3002", Msg: "file token missing, add it to header: CITRON-FILE-TOKEN"}
     FileTokenError  = model.Result{Code: "3003", Msg: "file token error"}
 
+    PackageNotReady  = model.Result{Code: "5001", Msg: "package not ready"}
 )
 
 func Ok(data interface{}) model.Result {

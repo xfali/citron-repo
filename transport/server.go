@@ -25,6 +25,10 @@ type TcpTransport struct {
     connList []*Connect
 }
 
+type DataListener func() (chan<- []byte, <-chan []byte)
+
+type ListenerFactory func() DataListener
+
 type Opt func(*TcpTransport)
 
 func SetPort(port string) Opt {
@@ -42,15 +46,9 @@ func SetReadBufSize(size int) Opt {
     }
 }
 
-func SetReadChan(readChan chan<- []byte) Opt {
+func SetListenerFactory(factory ListenerFactory) Opt {
     return func(t *TcpTransport) {
-        t.connConf.ReadChan = readChan
-    }
-}
-
-func SetWriteChan(writeChan <-chan []byte) Opt {
-    return func(t *TcpTransport) {
-        t.connConf.WriteChan = writeChan
+        t.connConf.factory = factory
     }
 }
 
