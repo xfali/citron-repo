@@ -39,9 +39,21 @@ func NewBinaryClient(addr string) *BinaryClient {
 
 func (c *BinaryClient) Close() error {
     if c.client != nil {
-        return c.Close()
+        return c.client.Close()
     }
     return nil
+}
+
+func WriteRequestHeader(w io.Writer, length int64) error {
+    return binary.Write(w, binary.BigEndian, protocol.RequestHeader{
+        MagicCode: MagicCode,
+        Version:   Version,
+        Length:    length,
+    })
+}
+
+func ReadResponseHeader(resp *protocol.ResponseHeader, r io.Reader) error {
+    return binary.Read(r, binary.BigEndian, resp)
 }
 
 func (c *BinaryClient) Send(length int64, body io.Reader) (err error) {

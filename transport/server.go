@@ -16,7 +16,6 @@ import (
 const (
     ReadTimeout  = 15 * time.Second
     WriteTimeout = 15 * time.Second
-    ReadBufSize  = 4096
 )
 
 type TcpTransport struct {
@@ -54,12 +53,15 @@ func SetPort(port string) Opt {
     }
 }
 
-func SetReadBufSize(size int) Opt {
+func SetReadTimeout(duration time.Duration) Opt {
     return func(t *TcpTransport) {
-        if size <= 0 {
-            size = ReadBufSize
-        }
-        t.connConf.ReadBufSize = size
+        t.connConf.readTimeout = duration
+    }
+}
+
+func SetWriteTimeout(duration time.Duration) Opt {
+    return func(t *TcpTransport) {
+        t.connConf.writeTimeout = duration
     }
 }
 
@@ -73,9 +75,6 @@ func NewTcpTransport(opts ...Opt) *TcpTransport {
     ret := &TcpTransport{}
     for i := range opts {
         opts[i](ret)
-    }
-    if ret.connConf.ReadBufSize == 0 {
-        ret.connConf.ReadBufSize = ReadBufSize
     }
     return ret
 }

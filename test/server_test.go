@@ -9,7 +9,7 @@ package test
 import (
     "bytes"
     "citron-repo/client"
-    "citron-repo/transport/binary"
+    "citron-repo/transport"
     "fmt"
     "github.com/xfali/goutils/log"
     "os"
@@ -18,7 +18,10 @@ import (
 
 func TestServer(t *testing.T) {
     log.Level = log.DEBUG
-    s := binary.NewBinaryServer()
+    s := transport.NewBinaryServer(
+        transport.SetTransport(transport.NewTcpTransport(
+            transport.SetPort("20001"))),
+    )
     s.ListenAndServe()
 }
 

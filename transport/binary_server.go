@@ -4,13 +4,12 @@
 // @version V1.0
 // Description: 
 
-package binary
+package transport
 
 import (
     "bytes"
     "citron-repo/ioutil"
     "citron-repo/protocol"
-    "citron-repo/transport"
     "encoding/binary"
     "errors"
     "fmt"
@@ -28,11 +27,10 @@ const (
 )
 
 type BinaryServer struct {
-    port           string
     magicCode      uint16
     version        uint16
     requestHandler RequestHandler
-    transport      *transport.TcpTransport
+    transport      *TcpTransport
     connList       []*binaryConn
 }
 
@@ -49,36 +47,37 @@ type PackageWriter func(size int64, reader io.Reader) error
 
 type RequestHandler interface {
     io.Writer
+    Reset()
     OnePackage(PackageWriter) error
 }
 
-type Opt func(s *BinaryServer)
+type BinOpt func(s *BinaryServer)
 
-func SetMagicCode(magicCode uint16) Opt {
+func SetMagicCode(magicCode uint16) BinOpt {
     return func(s *BinaryServer) {
         s.magicCode = magicCode
     }
 }
 
-func SetVersion(version uint16) Opt {
+func SetVersion(version uint16) BinOpt {
     return func(s *BinaryServer) {
         s.version = version
     }
 }
 
-func SetRequestHandler(handler RequestHandler) Opt {
+func SetRequestHandler(handler RequestHandler) BinOpt {
     return func(s *BinaryServer) {
         s.requestHandler = handler
     }
 }
 
-func SetPort(port string) Opt {
+func SetTransport(t *TcpTransport) BinOpt {
     return func(s *BinaryServer) {
-        s.port = port
+        s.transport = t
     }
 }
 
-func NewBinaryServer(opts ...Opt) *BinaryServer {
+func NewBinaryServer(opts ...BinOpt) *BinaryServer {
     s := BinaryServer{
         magicCode: MagicCode,
         version:   Version,
@@ -87,21 +86,21 @@ func NewBinaryServer(opts ...Opt) *BinaryServer {
     for i := range opts {
         opts[i](&s)
     }
-    if s.port == "" {
-        s.port = ":20000"
-    }
 
     if s.requestHandler == nil {
-        d := DummyHandler("dummy")
+        d := DummyHandler("")
         s.requestHandler = &d
     }
 
-    tcp := transport.NewTcpTransport(
-        transport.SetReadBufSize(PkgReadBufSize),
-        transport.SetPort(s.port),
-        transport.SetListenerFactory(s.createListener),
-    )
-    s.transport = tcp
+    if s.transport == nil {
+        tcp := NewTcpTransport(
+            SetPort(":20001"),
+            SetListenerFactory(s.createListener),
+        )
+        s.transport = tcp
+    } else {
+        s.transport.connConf.factory = s.createListener
+    }
 
     return &s
 }
@@ -110,7 +109,7 @@ func (s *BinaryServer) ListenAndServe() {
     s.transport.Startup()
 }
 
-func (s *BinaryServer) createListener() transport.Processor {
+func (s *BinaryServer) createListener() Processor {
     c := &binaryConn{
         readChan:  make(chan []byte),
         writeChan: make(chan []byte),
@@ -300,8 +299,12 @@ func (pkg *pkgHandler) processbody(data []byte) error {
     }
 
     if pkg.header.Length == pkg.bodyOffset {
-        pkg.requestHandler.OnePackage(pkg.write)
+        err := pkg.requestHandler.OnePackage(pkg.write)
+        if err != nil {
+            return err
+        }
         //prepare for next package
+        pkg.requestHandler.Reset()
         pkg.reset()
     }
 
@@ -357,8 +360,12 @@ func (pkg *pkgHandler) write(size int64, reader io.Reader) (err error) {
 type DummyHandler string
 
 func (d *DummyHandler) Write(p []byte) (n int, err error) {
-    *d = DummyHandler(p)
+    *d = DummyHandler(string(*d) + string(p))
     return len(p), nil
+}
+
+func (d *DummyHandler) Reset() {
+    *d = ""
 }
 
 func (d *DummyHandler) OnePackage(w PackageWriter) error {

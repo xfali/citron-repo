@@ -12,25 +12,35 @@ import (
     "testing"
 )
 
+const(
+    TEST_STRING = "12345678"
+)
+
 func TestIOUtil(t *testing.T) {
     t.Run("Copy", func(t *testing.T) {
-        r := bytes.NewReader([]byte("12345678"))
+        r := bytes.NewReader([]byte(TEST_STRING))
         w := bytes.NewBuffer(nil)
 
         n, e := ioutil.Copy(w, r)
 
         t.Logf("%v %v", n, e)
         t.Logf("ret : %s", string(w.Bytes()))
+        if string(w.Bytes()) != TEST_STRING {
+            t.Fatal()
+        }
     })
 
     t.Run("CopyN", func(t *testing.T) {
-        r := bytes.NewReader([]byte("12345678"))
+        r := bytes.NewReader([]byte(TEST_STRING))
         w := bytes.NewBuffer(nil)
 
         n, e := ioutil.CopyN(w, r, 3)
 
         t.Logf("%v %v", n, e)
         t.Logf("ret : %s", string(w.Bytes()))
+        if string(w.Bytes()) != "123" {
+            t.Fatal()
+        }
     })
 
     t.Run("CopyWithBuffer", func(t *testing.T) {
@@ -42,6 +52,9 @@ func TestIOUtil(t *testing.T) {
 
         t.Logf("%v %v", n, e)
         t.Logf("ret : %s", string(w.Bytes()))
+        if string(w.Bytes()) != TEST_STRING {
+            t.Fatal()
+        }
     })
 
     t.Run("CopyNWithBuffer", func(t *testing.T) {
@@ -53,6 +66,10 @@ func TestIOUtil(t *testing.T) {
 
         t.Logf("%v %v", n, e)
         t.Logf("ret : %s", string(w.Bytes()))
+
+        if string(w.Bytes()) != "123" {
+            t.Fatal()
+        }
     })
 
     t.Run("CopyNWithBuffer buf:100", func(t *testing.T) {
@@ -64,5 +81,9 @@ func TestIOUtil(t *testing.T) {
 
         t.Logf("%v %v", n, e)
         t.Logf("ret : %s", string(w.Bytes()))
+
+        if string(w.Bytes()) != "123" {
+            t.Fatal()
+        }
     })
 }

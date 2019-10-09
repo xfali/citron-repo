@@ -9,7 +9,9 @@ package test
 import (
     "bytes"
     "citron-repo/client"
-    "citron-repo/transport/binary"
+    "citron-repo/ioutil"
+    "citron-repo/protocol"
+    "citron-repo/transport"
     "fmt"
     "github.com/xfali/goutils/log"
     "io"
@@ -22,8 +24,9 @@ import (
 
 func TestBinary(t *testing.T) {
     log.Level = log.DEBUG
-    s := binary.NewBinaryServer(
-        binary.SetPort(":20001"),
+    s := transport.NewBinaryServer(
+        transport.SetTransport(transport.NewTcpTransport(
+            transport.SetPort(":20001"))),
     )
 
     go s.ListenAndServe()
@@ -49,6 +52,137 @@ func TestBinary(t *testing.T) {
 
     select {
     case <-time.NewTimer(10 * time.Second).C:
+        return
+    }
+}
+
+func readResponseHeader(c *client.TcpClient, w io.ReadWriter) protocol.ResponseHeader {
+    n, er := c.ReceiveN(w, int64(protocol.ResponseHeaderSize))
+    if n != int64(protocol.ResponseHeaderSize) {
+        panic("error")
+    }
+    if er != nil {
+        panic("error")
+    }
+
+    header := protocol.ResponseHeader{}
+    client.ReadResponseHeader(&header, w)
+    return header
+}
+
+func TestBinaryMultiPkg(t *testing.T) {
+    log.Level = log.DEBUG
+    s := transport.NewBinaryServer(
+        transport.SetTransport(transport.NewTcpTransport(
+            transport.SetPort(":20001"))),
+    )
+
+    go s.ListenAndServe()
+    go http.ListenAndServe(":8001", nil)
+
+    time.Sleep(time.Second)
+
+    c := client.Open(":20001")
+
+    b := make([]byte, 32*1024)
+    buf := &ioutil.ByteWrapper{
+        B: b,
+    }
+
+    client.WriteRequestHeader(buf, 3)
+    buf.Write([]byte("123"))
+    client.WriteRequestHeader(buf, 3)
+    buf.Write([]byte("45"))
+
+    c.Send(buf)
+
+    r := &ioutil.ByteWrapper{B: b}
+    header := readResponseHeader(c, r)
+    t.Log(header)
+
+    r.Reset()
+    //body
+    c.ReceiveN(r, 3)
+    t.Log(string(r.Bytes()))
+
+    buf.Reset()
+    //finish send pkg
+    buf.Write([]byte("6"))
+    time.Sleep(time.Second)
+    c.Send(buf)
+
+    //next pkg
+    r.Reset()
+    header = readResponseHeader(c, r)
+    t.Log(header)
+
+    //body
+    r.Reset()
+    c.ReceiveN(r, 3)
+    t.Log(string(r.Bytes()))
+
+    select {
+    case <-time.NewTimer(5 * time.Second).C:
+        return
+    }
+}
+
+func TestBinaryMultiPkgTimeout(t *testing.T) {
+    log.Level = log.DEBUG
+    s := transport.NewBinaryServer(
+        transport.SetTransport(transport.NewTcpTransport(
+            transport.SetPort(":20001"),
+            transport.SetReadTimeout(500*time.Millisecond),
+            transport.SetWriteTimeout(500*time.Millisecond))),
+    )
+
+    go s.ListenAndServe()
+    go http.ListenAndServe(":8001", nil)
+
+    time.Sleep(time.Second)
+
+    c := client.Open(":20001")
+
+    b := make([]byte, 32*1024)
+    buf := &ioutil.ByteWrapper{
+        B: b,
+    }
+
+    client.WriteRequestHeader(buf, 3)
+    buf.Write([]byte("123"))
+    client.WriteRequestHeader(buf, 3)
+    buf.Write([]byte("45"))
+
+    c.Send(buf)
+
+    r := &ioutil.ByteWrapper{B: b}
+    header := readResponseHeader(c, r)
+    t.Log(header)
+
+    r.Reset()
+    //body
+    c.ReceiveN(r, 3)
+    t.Log(string(r.Bytes()))
+
+    buf.Reset()
+    //finish send pkg
+    buf.Write([]byte("6"))
+    //timeout here
+    time.Sleep(time.Second)
+    c.Send(buf)
+
+    //next pkg
+    r.Reset()
+    header = readResponseHeader(c, r)
+    t.Log(header)
+
+    //body
+    r.Reset()
+    c.ReceiveN(r, 3)
+    t.Log(string(r.Bytes()))
+
+    select {
+    case <-time.NewTimer(5 * time.Second).C:
         return
     }
 }

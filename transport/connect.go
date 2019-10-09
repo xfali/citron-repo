@@ -11,11 +11,12 @@ import (
     "github.com/xfali/goutils/log"
     "net"
     "sync"
+    "time"
 )
 
 type ConnConfig struct {
-    ReadBufSize  int
-    WriteBufSize int
+    readTimeout  time.Duration
+    writeTimeout time.Duration
 
     factory ProcessorFactory
 }
@@ -25,17 +26,22 @@ type Connect struct {
     stopChan chan bool
     wait     sync.WaitGroup
 
-    p           Processor
-    readBufSize int
+    p Processor
+
+    //read timeout
+    rt time.Duration
+    //write timeout
+    wt time.Duration
 }
 
 func NewConnect(conf ConnConfig, conn net.Conn) *Connect {
     p := conf.factory()
     ret := Connect{
-        conn:        conn,
-        stopChan:    make(chan bool),
-        readBufSize: conf.ReadBufSize,
-        p: p,
+        conn:     conn,
+        stopChan: make(chan bool),
+        p:        p,
+        rt:       conf.readTimeout,
+        wt:       conf.writeTimeout,
     }
 
     return &ret
@@ -62,6 +68,9 @@ func (c *Connect) ReadLoop() {
 
     for {
         data := c.p.AcquireReadBuf()
+        if c.rt > 0 {
+            c.conn.SetReadDeadline(time.Now().Add(c.rt))
+        }
         n, err := c.conn.Read(data)
         if err != nil {
             log.Error(err.Error())
@@ -99,6 +108,9 @@ func (c *Connect) WriteLoop() {
             break
         }
 
+        if c.wt > 0 {
+            c.conn.SetWriteDeadline(time.Now().Add(c.wt))
+        }
         n, err := c.conn.Write(d)
         if err != nil {
             log.Error(err.Error())
