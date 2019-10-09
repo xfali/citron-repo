@@ -17,7 +17,7 @@ type ConnConfig struct {
     ReadBufSize  int
     WriteBufSize int
 
-    factory ListenerFactory
+    factory ProcessorFactory
 }
 
 type Connect struct {
@@ -25,22 +25,17 @@ type Connect struct {
     stopChan chan bool
     wait     sync.WaitGroup
 
-    readChan    chan<- []byte
-    writeChan   <-chan []byte
-    closeChan   <-chan bool
+    p           Processor
     readBufSize int
 }
 
 func NewConnect(conf ConnConfig, conn net.Conn) *Connect {
-    l := conf.factory()
-    r, w, c := l()
+    p := conf.factory()
     ret := Connect{
         conn:        conn,
         stopChan:    make(chan bool),
         readBufSize: conf.ReadBufSize,
-        readChan:    r,
-        writeChan:   w,
-        closeChan:   c,
+        p: p,
     }
 
     return &ret
@@ -61,12 +56,12 @@ func (c *Connect) ProcessLoop() {
 
 func (c *Connect) ReadLoop() {
     defer c.wait.Done()
-    if c.readChan == nil {
+    if c.p.ReadChan() == nil {
         return
     }
 
-    data := make([]byte, c.readBufSize)
     for {
+        data := c.p.AcquireReadBuf()
         n, err := c.conn.Read(data)
         if err != nil {
             log.Error(err.Error())
@@ -80,9 +75,9 @@ func (c *Connect) ReadLoop() {
         select {
         case <-c.stopChan:
             return
-        case <-c.closeChan:
+        case <-c.p.CloseChan():
             return
-        case c.readChan <- data[:n]:
+        case c.p.ReadChan() <- data[:n]:
             break
         }
     }
@@ -90,7 +85,7 @@ func (c *Connect) ReadLoop() {
 
 func (c *Connect) WriteLoop() {
     defer c.wait.Done()
-    if c.writeChan == nil {
+    if c.p.WriteChan() == nil {
         return
     }
     for {
@@ -98,9 +93,9 @@ func (c *Connect) WriteLoop() {
         select {
         case <-c.stopChan:
             return
-        case <-c.closeChan:
+        case <-c.p.CloseChan():
             return
-        case d = <-c.writeChan:
+        case d = <-c.p.WriteChan():
             break
         }
 
@@ -112,6 +107,8 @@ func (c *Connect) WriteLoop() {
             break
         }
         log.Debug("write %s", string(d[:n]))
+
+        c.p.ReleaseWriteBuf(d)
     }
 }
 

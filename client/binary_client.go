@@ -7,7 +7,7 @@
 package client
 
 import (
-    "bytes"
+    "citron-repo/ioutil"
     "citron-repo/protocol"
     "encoding/binary"
     "errors"
@@ -23,15 +23,15 @@ const (
 )
 
 type BinaryClient struct {
-    sendBuffer *bytes.Buffer
-    recvBuffer *bytes.Buffer
+    sendBuffer []byte
+    recvBuffer []byte
     client     *TcpClient
 }
 
 func NewBinaryClient(addr string) *BinaryClient {
     ret := &BinaryClient{
-        sendBuffer: bytes.NewBuffer(make([]byte, WriteBufferSize)),
-        recvBuffer: bytes.NewBuffer(make([]byte, ReadBufferSize)),
+        sendBuffer: make([]byte, WriteBufferSize),
+        recvBuffer: make([]byte, ReadBufferSize),
         client:     Open(addr),
     }
     return ret
@@ -45,8 +45,8 @@ func (c *BinaryClient) Close() error {
 }
 
 func (c *BinaryClient) Send(length int64, body io.Reader) (err error) {
-    c.sendBuffer.Reset()
-    err = binary.Write(c.sendBuffer, binary.BigEndian, protocol.RequestHeader{
+    w := &ioutil.ByteWrapper{B: c.sendBuffer}
+    err = binary.Write(w, binary.BigEndian, protocol.RequestHeader{
         MagicCode: MagicCode,
         Version:   Version,
         Length:    length,
@@ -54,7 +54,7 @@ func (c *BinaryClient) Send(length int64, body io.Reader) (err error) {
     if err != nil {
         return err
     }
-    _, err = c.client.Send(c.sendBuffer)
+    _, err = c.client.Send(w)
     if err != nil {
         return err
     }
@@ -69,8 +69,8 @@ func (c *BinaryClient) Send(length int64, body io.Reader) (err error) {
 }
 
 func (c *BinaryClient) Receive() (body io.Reader, err error) {
-    c.recvBuffer.Reset()
-    n, er := c.client.ReceiveN(c.recvBuffer, int64(protocol.ResponseHeaderSize))
+    r := &ioutil.ByteWrapper{B: c.recvBuffer}
+    n, er := c.client.ReceiveN(r, int64(protocol.ResponseHeaderSize))
     if n != int64(protocol.ResponseHeaderSize) {
         return nil, errors.New("read header error")
     }
@@ -80,7 +80,7 @@ func (c *BinaryClient) Receive() (body io.Reader, err error) {
     }
 
     header := protocol.ResponseHeader{}
-    err = binary.Read(c.recvBuffer, binary.BigEndian, &header)
+    err = binary.Read(r, binary.BigEndian, &header)
     if err != nil {
         return
     }

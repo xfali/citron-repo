@@ -26,10 +26,25 @@ type TcpTransport struct {
     connList []*Connect
 }
 
+type Processor interface {
+    //read channel
+    ReadChan() chan<- []byte
+    //write channel
+    WriteChan() <-chan []byte
+    //close channel
+    CloseChan() <-chan bool
 
-type DataListener func() (chan<- []byte, <-chan []byte, <-chan bool)
+    //获得读缓存，必须保证获得的buf操作是线程安全的
+    AcquireReadBuf() []byte
+    ////归还缓存，必须保证归还的buf操作是线程安全的
+    //ReleaseReadBuf(d []byte)
+    ////获得写缓存，必须保证获得的buf操作是线程安全的
+    //AcquireWriteBuf() []byte
+    //归还缓存，必须保证归还的buf操作是线程安全的
+    ReleaseWriteBuf([]byte)
+}
 
-type ListenerFactory func() DataListener
+type ProcessorFactory func() Processor
 
 type Opt func(*TcpTransport)
 
@@ -48,7 +63,7 @@ func SetReadBufSize(size int) Opt {
     }
 }
 
-func SetListenerFactory(factory ListenerFactory) Opt {
+func SetListenerFactory(factory ProcessorFactory) Opt {
     return func(t *TcpTransport) {
         t.connConf.factory = factory
     }

@@ -9,7 +9,7 @@ package main
 import (
     "citron-repo/handler"
     "citron-repo/model"
-    "citron-repo/transport"
+    "citron-repo/transport/binary"
     "flag"
     "github.com/xfali/go-web-starter/config"
 )
@@ -32,6 +32,6 @@ func main() {
     defer handler.Close()
 
     //web.StartupWithConf(conf, handler.Api)
-    s := transport.NewBinaryServer()
+    s := binary.NewBinaryServer()
     s.ListenAndServe()
 }

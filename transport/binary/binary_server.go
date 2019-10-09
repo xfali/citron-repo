@@ -13,9 +13,11 @@ import (
     "citron-repo/transport"
     "encoding/binary"
     "errors"
+    "fmt"
     "github.com/xfali/goutils/log"
     "io"
     "strings"
+    "sync"
 )
 
 const (
@@ -38,6 +40,9 @@ type binaryConn struct {
     readChan  chan []byte
     writeChan chan []byte
     stopChan  chan bool
+
+    readBufPool  sync.Pool
+    writeBufPool sync.Pool
 }
 
 type PackageWriter func(size int64, reader io.Reader) error
@@ -105,15 +110,22 @@ func (s *BinaryServer) ListenAndServe() {
     s.transport.Startup()
 }
 
-func (s *BinaryServer) createListener() transport.DataListener {
+func (s *BinaryServer) createListener() transport.Processor {
     c := &binaryConn{
         readChan:  make(chan []byte),
         writeChan: make(chan []byte),
         stopChan:  make(chan bool),
+
+        readBufPool: sync.Pool{New: func() interface{} {
+            return make([]byte, PkgReadBufSize)
+        }},
+        writeBufPool: sync.Pool{New: func() interface{} {
+            return make([]byte, PkgWriteBufSize)
+        }},
     }
     s.connList = append(s.connList, c)
     go c.process(s.magicCode, s.version, s.requestHandler)
-    return c.getListener
+    return c
 }
 
 func (s *BinaryServer) Close() error {
@@ -128,8 +140,32 @@ func (c *binaryConn) Close() error {
     return nil
 }
 
-func (c *binaryConn) getListener() (chan<- []byte, <-chan []byte, <-chan bool) {
-    return c.readChan, c.writeChan, c.stopChan
+func (c *binaryConn) ReadChan() chan<- []byte {
+    return c.readChan
+}
+
+func (c *binaryConn) WriteChan() <-chan []byte {
+    return c.writeChan
+}
+
+func (c *binaryConn) CloseChan() <-chan bool {
+    return c.stopChan
+}
+
+func (c *binaryConn) AcquireReadBuf() []byte {
+    return c.readBufPool.Get().([]byte)[0:PkgReadBufSize]
+}
+
+func (c *binaryConn) ReleaseReadBuf(d []byte) {
+    c.readBufPool.Put(d)
+}
+
+func (c *binaryConn) AcquireWriteBuf() []byte {
+    return c.writeBufPool.Get().([]byte)[0:PkgWriteBufSize]
+}
+
+func (c *binaryConn) ReleaseWriteBuf(d []byte) {
+    c.writeBufPool.Put(d)
 }
 
 func (c *binaryConn) process(magicCode, version uint16, handler RequestHandler) {
@@ -137,10 +173,8 @@ func (c *binaryConn) process(magicCode, version uint16, handler RequestHandler) 
         magicCode:      magicCode,
         version:        version,
         ready:          false,
-        readBuf:        make([]byte, PkgReadBufSize),
-        writeBuf:       make([]byte, PkgWriteBufSize),
-        reader:         c.readChan,
-        writer:         c.writeChan,
+        headerBuf:      make([]byte, PkgReadBufSize),
+        conn:           c,
         requestHandler: handler,
     }
 
@@ -151,6 +185,7 @@ func (c *binaryConn) process(magicCode, version uint16, handler RequestHandler) 
         case d := <-c.readChan:
             log.Debug("receive : %s", string(d))
             err := pkg.next(d)
+            c.ReleaseReadBuf(d)
             if err != nil {
                 close(c.stopChan)
                 return
@@ -163,12 +198,10 @@ func (c *binaryConn) process(magicCode, version uint16, handler RequestHandler) 
 type pkgHandler struct {
     magicCode      uint16
     version        uint16
-    reader         <-chan []byte
-    writer         chan<- []byte
+    conn           *binaryConn
     ready          bool
     headerOffset   int
-    readBuf        []byte
-    writeBuf       []byte
+    headerBuf      []byte
     header         protocol.RequestHeader
     bodyOffset     int64
     requestHandler RequestHandler
@@ -182,7 +215,7 @@ func (pkg *pkgHandler) reset() {
 }
 
 func (pkg *pkgHandler) toHeader() error {
-    err := binary.Read(bytes.NewReader(pkg.readBuf), binary.BigEndian, &pkg.header)
+    err := binary.Read(bytes.NewReader(pkg.headerBuf), binary.BigEndian, &pkg.header)
     if err != nil {
         return err
     }
@@ -228,7 +261,7 @@ func (pkg *pkgHandler) processHeader(data []byte) error {
         copyLen = dataLen
         pkg.ready = true
     }
-    copy(pkg.readBuf[pkg.headerOffset:], data[:copyLen])
+    copy(pkg.headerBuf[pkg.headerOffset:], data[:copyLen])
     if pkg.ready {
         if err := pkg.toHeader(); err != nil {
             return err
@@ -287,29 +320,32 @@ func (pkg *pkgHandler) createHeader(size int64) protocol.ResponseHeader {
 }
 
 func (pkg *pkgHandler) Write(d []byte) (n int, err error) {
-    pkg.writer <- d
+    pkg.conn.writeChan <- d
     return len(d), nil
 }
 
 func (pkg *pkgHandler) write(size int64, reader io.Reader) (err error) {
+    buf := pkg.conn.AcquireWriteBuf()
     //write header
-    writer := bytes.Buffer{}
+    writer := ioutil.ByteWrapper{B: buf}
     header := pkg.createHeader(size)
     err = binary.Write(&writer, binary.BigEndian, header)
     if err != nil {
         return err
     }
-
-    _, err = pkg.Write(writer.Bytes())
+    b := writer.Bytes()
+    if len(b) != int(protocol.ResponseHeaderSize) {
+        return fmt.Errorf("Response header size error %v ", b)
+    }
+    _, err = pkg.Write(b)
     if err != nil {
         return err
     }
 
     //write body
     if reader != nil {
-        writer.Reset()
-
-        _, err = ioutil.CopyNWithBuffer(pkg, reader, header.Length, pkg.writeBuf)
+        buf := pkg.conn.AcquireWriteBuf()
+        _, err = ioutil.CopyNWithBuffer(pkg, reader, header.Length, buf)
         if err != nil {
             return err
         }

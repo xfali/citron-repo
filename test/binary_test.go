@@ -13,6 +13,8 @@ import (
     "fmt"
     "github.com/xfali/goutils/log"
     "io"
+    "net/http"
+    _ "net/http/pprof"
     "strings"
     "testing"
     "time"
@@ -25,9 +27,11 @@ func TestBinary(t *testing.T) {
     )
 
     go s.ListenAndServe()
+    go http.ListenAndServe(":8001", nil)
 
     c := client.NewBinaryClient(":20001")
     buf := bytes.NewBuffer(make([]byte, 1024))
+    time.Sleep(time.Second)
     for i := 0; i < 100; i++ {
         buf.Reset()
         msg := fmt.Sprintf("test %d", i)
