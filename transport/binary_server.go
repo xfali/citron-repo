@@ -15,8 +15,8 @@ import (
     "fmt"
     "github.com/xfali/goutils/log"
     "io"
-    "strings"
     "sync"
+    "sync/atomic"
 )
 
 const (
@@ -26,12 +26,19 @@ const (
     PkgWriteBufSize = 32 * 1024
 )
 
-type BinaryServer struct {
+type connConf struct {
     magicCode      uint16
     version        uint16
     requestHandler RequestHandler
-    transport      *TcpTransport
-    connList       []*binaryConn
+    readBufSize    int
+    writeBufSize   int
+}
+
+type BinaryServer struct {
+    transport *TcpTransport
+    connList  []*binaryConn
+
+    conf connConf
 }
 
 type binaryConn struct {
@@ -41,6 +48,8 @@ type binaryConn struct {
 
     readBufPool  sync.Pool
     writeBufPool sync.Pool
+
+    conf connConf
 }
 
 type PackageWriter func(size int64, reader io.Reader) error
@@ -53,21 +62,33 @@ type RequestHandler interface {
 
 type BinOpt func(s *BinaryServer)
 
+func SetReadBufSize(size int) BinOpt {
+    return func(s *BinaryServer) {
+        s.conf.readBufSize = size
+    }
+}
+
+func SetWriteBufSize(size int) BinOpt {
+    return func(s *BinaryServer) {
+        s.conf.writeBufSize = size
+    }
+}
+
 func SetMagicCode(magicCode uint16) BinOpt {
     return func(s *BinaryServer) {
-        s.magicCode = magicCode
+        s.conf.magicCode = magicCode
     }
 }
 
 func SetVersion(version uint16) BinOpt {
     return func(s *BinaryServer) {
-        s.version = version
+        s.conf.version = version
     }
 }
 
 func SetRequestHandler(handler RequestHandler) BinOpt {
     return func(s *BinaryServer) {
-        s.requestHandler = handler
+        s.conf.requestHandler = handler
     }
 }
 
@@ -79,17 +100,16 @@ func SetTransport(t *TcpTransport) BinOpt {
 
 func NewBinaryServer(opts ...BinOpt) *BinaryServer {
     s := BinaryServer{
-        magicCode: MagicCode,
-        version:   Version,
     }
+
+    s.conf.requestHandler = newDummyHandler()
+    s.conf.readBufSize = PkgReadBufSize
+    s.conf.writeBufSize = PkgWriteBufSize
+    s.conf.magicCode = MagicCode
+    s.conf.version = Version
 
     for i := range opts {
         opts[i](&s)
-    }
-
-    if s.requestHandler == nil {
-        d := DummyHandler("")
-        s.requestHandler = &d
     }
 
     if s.transport == nil {
@@ -106,7 +126,7 @@ func NewBinaryServer(opts ...BinOpt) *BinaryServer {
 }
 
 func (s *BinaryServer) ListenAndServe() {
-    s.transport.Startup()
+    s.transport.ListenAndServe()
 }
 
 func (s *BinaryServer) createListener() Processor {
@@ -116,14 +136,15 @@ func (s *BinaryServer) createListener() Processor {
         stopChan:  make(chan bool),
 
         readBufPool: sync.Pool{New: func() interface{} {
-            return make([]byte, PkgReadBufSize)
+            return make([]byte, s.conf.readBufSize)
         }},
         writeBufPool: sync.Pool{New: func() interface{} {
-            return make([]byte, PkgWriteBufSize)
+            return make([]byte, s.conf.writeBufSize)
         }},
+        conf: s.conf,
     }
     s.connList = append(s.connList, c)
-    go c.process(s.magicCode, s.version, s.requestHandler)
+    go c.process(s.conf)
     return c
 }
 
@@ -151,30 +172,39 @@ func (c *binaryConn) CloseChan() <-chan bool {
     return c.stopChan
 }
 
+var readCount int32 = 0
+var writeCount int32 = 0
+
 func (c *binaryConn) AcquireReadBuf() []byte {
-    return c.readBufPool.Get().([]byte)[0:PkgReadBufSize]
+    atomic.AddInt32(&readCount, 1)
+    return c.readBufPool.Get().([]byte)[0:c.conf.readBufSize]
 }
 
 func (c *binaryConn) ReleaseReadBuf(d []byte) {
     c.readBufPool.Put(d)
+    x := atomic.AddInt32(&readCount, -1)
+    log.Debug("ReleaseReadBuf : %d", x)
 }
 
 func (c *binaryConn) AcquireWriteBuf() []byte {
-    return c.writeBufPool.Get().([]byte)[0:PkgWriteBufSize]
+    atomic.AddInt32(&writeCount, 1)
+    return c.writeBufPool.Get().([]byte)[0:c.conf.writeBufSize]
 }
 
 func (c *binaryConn) ReleaseWriteBuf(d []byte) {
     c.writeBufPool.Put(d)
+    x := atomic.AddInt32(&writeCount, -1)
+    log.Debug("ReleaseWriteBuf : %d", x)
 }
 
-func (c *binaryConn) process(magicCode, version uint16, handler RequestHandler) {
+func (c *binaryConn) process(conf connConf) {
     pkg := pkgHandler{
-        magicCode:      magicCode,
-        version:        version,
+        magicCode:      conf.magicCode,
+        version:        conf.version,
         ready:          false,
         headerBuf:      make([]byte, PkgReadBufSize),
         conn:           c,
-        requestHandler: handler,
+        requestHandler: conf.requestHandler,
     }
 
     for {
@@ -347,28 +377,45 @@ func (pkg *pkgHandler) write(size int64, reader io.Reader) (err error) {
 
     //write body
     if reader != nil {
-        buf := pkg.conn.AcquireWriteBuf()
-        _, err = ioutil.CopyNWithBuffer(pkg, reader, header.Length, buf)
-        if err != nil {
-            return err
+        var count int64 = 0
+        for count < size {
+            buf := pkg.conn.AcquireWriteBuf()
+            readSize := int64(len(buf))
+            if readSize > size-count {
+                readSize = size - count
+            }
+            n, err := ioutil.CopyNWithBuffer(pkg, reader, readSize, buf)
+            if err != nil {
+                return err
+            }
+            count += n
         }
     }
 
     return nil
 }
 
-type DummyHandler string
+type DummyHandler bytes.Buffer
+
+const (
+    DUMMYHANDLER_SIZE = 4 * 1024 * 1024
+)
+
+func newDummyHandler() *DummyHandler {
+    d := &DummyHandler{}
+    (*bytes.Buffer)(d).Grow(DUMMYHANDLER_SIZE)
+    return d
+}
 
 func (d *DummyHandler) Write(p []byte) (n int, err error) {
-    *d = DummyHandler(string(*d) + string(p))
-    return len(p), nil
+    return (*bytes.Buffer)(d).Write(p)
 }
 
 func (d *DummyHandler) Reset() {
-    *d = ""
+    (*bytes.Buffer)(d).Reset()
 }
 
 func (d *DummyHandler) OnePackage(w PackageWriter) error {
-    s := string(*d)
-    return w(int64(len(s)), strings.NewReader(s))
+    buf := (*bytes.Buffer)(d)
+    return w(int64(buf.Len()), buf)
 }

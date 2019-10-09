@@ -21,6 +21,7 @@ const (
 type TcpTransport struct {
     port     string
     listener net.Listener
+    stop     bool
     connConf ConnConfig
     connList []*Connect
 }
@@ -79,7 +80,7 @@ func NewTcpTransport(opts ...Opt) *TcpTransport {
     return ret
 }
 
-func (t *TcpTransport) Startup() error {
+func (t *TcpTransport) ListenAndServe() error {
     l, err := net.Listen("tcp", t.port)
     if err != nil {
         return err
@@ -88,6 +89,9 @@ func (t *TcpTransport) Startup() error {
 
     ctx, cancel := context.WithCancel(context.Background())
     for {
+        if t.stop {
+            return nil
+        }
         c, err := l.Accept()
         if err != nil {
             cancel()
@@ -98,6 +102,7 @@ func (t *TcpTransport) Startup() error {
 }
 
 func (t *TcpTransport) Close() error {
+    t.stop = true
     err := t.listener.Close()
     for _, conn := range t.connList {
         conn.Close()

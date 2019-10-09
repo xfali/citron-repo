@@ -17,6 +17,7 @@ import (
     "io"
     "net/http"
     _ "net/http/pprof"
+    "os"
     "strings"
     "testing"
     "time"
@@ -50,10 +51,7 @@ func TestBinary(t *testing.T) {
         t.Logf("%s\n", string(buf.Bytes()))
     }
 
-    select {
-    case <-time.NewTimer(10 * time.Second).C:
-        return
-    }
+    <-time.NewTimer(10 * time.Second).C
 }
 
 func readResponseHeader(c *client.TcpClient, w io.ReadWriter) protocol.ResponseHeader {
@@ -121,10 +119,7 @@ func TestBinaryMultiPkg(t *testing.T) {
     c.ReceiveN(r, 3)
     t.Log(string(r.Bytes()))
 
-    select {
-    case <-time.NewTimer(5 * time.Second).C:
-        return
-    }
+    <-time.NewTimer(5 * time.Second).C
 }
 
 func TestBinaryMultiPkgTimeout(t *testing.T) {
@@ -181,8 +176,48 @@ func TestBinaryMultiPkgTimeout(t *testing.T) {
     c.ReceiveN(r, 3)
     t.Log(string(r.Bytes()))
 
-    select {
-    case <-time.NewTimer(5 * time.Second).C:
-        return
+    <-time.NewTimer(5 * time.Second).C
+}
+
+func TestBinarySendFile(t *testing.T) {
+    log.Level = log.WARN
+    s := transport.NewBinaryServer(
+        transport.SetTransport(transport.NewTcpTransport(
+            transport.SetPort(":20001"),
+            )),
+    )
+
+    go s.ListenAndServe()
+    go http.ListenAndServe(":8001", nil)
+
+    c := client.NewBinaryClient(":20001")
+    buf := make([]byte, 32*1024)
+    time.Sleep(time.Second)
+    file, err := os.Open("C:/Users/Administrator/Downloads/6.7.1.9.exe")
+    if err != nil {
+        t.Fatal(err)
     }
+    st, _ := file.Stat()
+    now := time.Now()
+    c.Send(st.Size(), file)
+    t.Logf("send use time %d ms", time.Since(now)/time.Millisecond)
+
+    r, e := c.Receive()
+    if e != nil {
+        t.Fatal(e)
+    }
+
+    newFile, err2 := os.Create("C:/Users/Administrator/Downloads/6.7.1.9_test.exe")
+    if err2 != nil {
+        t.Fatal(e)
+    }
+
+    now = time.Now()
+    io.CopyBuffer(newFile, r, buf)
+    t.Logf("receive use time %d ms", time.Since(now)/time.Millisecond)
+
+    <-time.NewTimer(5 * time.Second).C
+    s.Close()
+
+    <-time.NewTimer(2 * time.Second).C
 }

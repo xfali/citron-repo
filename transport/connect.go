@@ -97,6 +97,7 @@ func (c *Connect) WriteLoop() {
     if c.p.WriteChan() == nil {
         return
     }
+
     for {
         var d []byte
         select {
