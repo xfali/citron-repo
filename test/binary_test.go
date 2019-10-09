@@ -7,12 +7,44 @@
 package test
 
 import (
+    "bytes"
+    "citron-repo/client"
     "citron-repo/transport/binary"
+    "fmt"
+    "github.com/xfali/goutils/log"
+    "io"
+    "strings"
     "testing"
+    "time"
 )
 
 func TestBinary(t *testing.T) {
-    binary.NewBinaryServer(
-        binary.SetBodyHandler()
+    log.Level = log.DEBUG
+    s := binary.NewBinaryServer(
+        binary.SetPort(":20001"),
     )
+
+    go s.ListenAndServe()
+
+    c := client.NewBinaryClient(":20001")
+    buf := bytes.NewBuffer(make([]byte, 1024))
+    for i := 0; i < 100; i++ {
+        buf.Reset()
+        msg := fmt.Sprintf("test %d", i)
+        err := c.Send(int64(len(msg)), strings.NewReader(msg))
+        if err != nil {
+            t.Fatal(err)
+        }
+        r, err := c.Receive()
+        if err != nil {
+            t.Fatal(err)
+        }
+        io.Copy(buf, r)
+        t.Logf("%s\n", string(buf.Bytes()))
+    }
+
+    select {
+    case <-time.NewTimer(10 * time.Second).C:
+        return
+    }
 }

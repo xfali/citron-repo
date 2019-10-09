@@ -7,6 +7,7 @@
 package transport
 
 import (
+    "citron-repo/ioutil"
     "github.com/xfali/goutils/log"
     "net"
     "sync"
@@ -26,18 +27,20 @@ type Connect struct {
 
     readChan    chan<- []byte
     writeChan   <-chan []byte
+    closeChan   <-chan bool
     readBufSize int
 }
 
 func NewConnect(conf ConnConfig, conn net.Conn) *Connect {
     l := conf.factory()
-    r, w := l()
+    r, w, c := l()
     ret := Connect{
         conn:        conn,
         stopChan:    make(chan bool),
         readBufSize: conf.ReadBufSize,
         readChan:    r,
         writeChan:   w,
+        closeChan:   c,
     }
 
     return &ret
@@ -52,6 +55,7 @@ func (c *Connect) ProcessLoop() {
 
     //wait read and write finished
     c.wait.Wait()
+    log.Info("connect closed %v", c.conn.RemoteAddr())
     c.conn.Close()
 }
 
@@ -71,10 +75,12 @@ func (c *Connect) ReadLoop() {
             return
         }
 
-        log.Debug("read %s", string(data[:n]))
+        log.Debug("read %s %d", string(data[:n]), ioutil.GetGoroutineID())
 
         select {
         case <-c.stopChan:
+            return
+        case <-c.closeChan:
             return
         case c.readChan <- data[:n]:
             break
@@ -91,6 +97,8 @@ func (c *Connect) WriteLoop() {
         var d []byte
         select {
         case <-c.stopChan:
+            return
+        case <-c.closeChan:
             return
         case d = <-c.writeChan:
             break

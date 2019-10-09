@@ -11,6 +11,7 @@ import (
     "citron-repo/protocol"
     "encoding/binary"
     "errors"
+    "github.com/xfali/goutils/log"
     "io"
 )
 
@@ -21,14 +22,14 @@ const (
     WriteBufferSize = 32 * 1024
 )
 
-type CommandClient struct {
+type BinaryClient struct {
     sendBuffer *bytes.Buffer
     recvBuffer *bytes.Buffer
     client     *TcpClient
 }
 
-func NewCommandClient(addr string) *CommandClient {
-    ret := &CommandClient{
+func NewBinaryClient(addr string) *BinaryClient {
+    ret := &BinaryClient{
         sendBuffer: bytes.NewBuffer(make([]byte, WriteBufferSize)),
         recvBuffer: bytes.NewBuffer(make([]byte, ReadBufferSize)),
         client:     Open(addr),
@@ -36,14 +37,14 @@ func NewCommandClient(addr string) *CommandClient {
     return ret
 }
 
-func (c *CommandClient) Close() error {
+func (c *BinaryClient) Close() error {
     if c.client != nil {
         return c.Close()
     }
     return nil
 }
 
-func (c *CommandClient) Send(length int64, body io.Reader) (err error) {
+func (c *BinaryClient) Send(length int64, body io.Reader) (err error) {
     c.sendBuffer.Reset()
     err = binary.Write(c.sendBuffer, binary.BigEndian, protocol.RequestHeader{
         MagicCode: MagicCode,
@@ -67,7 +68,7 @@ func (c *CommandClient) Send(length int64, body io.Reader) (err error) {
     return nil
 }
 
-func (c *CommandClient) Receive() (body io.Reader, err error) {
+func (c *BinaryClient) Receive() (body io.Reader, err error) {
     c.recvBuffer.Reset()
     n, er := c.client.ReceiveN(c.recvBuffer, int64(protocol.ResponseHeaderSize))
     if n != int64(protocol.ResponseHeaderSize) {
@@ -84,6 +85,7 @@ func (c *CommandClient) Receive() (body io.Reader, err error) {
         return
     }
 
+    log.Debug("header is %v", header)
     if header.MagicCode != MagicCode {
         err = errors.New("Magic Code Not Match ")
         return

@@ -8,6 +8,7 @@ package transport
 
 import (
     "context"
+    "github.com/xfali/goutils/log"
     "net"
     "time"
 )
@@ -25,7 +26,8 @@ type TcpTransport struct {
     connList []*Connect
 }
 
-type DataListener func() (chan<- []byte, <-chan []byte)
+
+type DataListener func() (chan<- []byte, <-chan []byte, <-chan bool)
 
 type ListenerFactory func() DataListener
 
@@ -92,5 +94,6 @@ func (t *TcpTransport) Close() error {
 func (t *TcpTransport) handleConnect(ctx context.Context, c net.Conn) {
     conn := NewConnect(t.connConf, c)
     t.connList = append(t.connList, conn)
+    log.Debug("accept %v", c.RemoteAddr())
     go conn.ProcessLoop()
 }

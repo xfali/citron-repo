@@ -8,11 +8,11 @@ package binary
 
 import "io"
 
-type Request struct {
-    Body   io.Reader
+type Request interface {
+    Read(w io.Writer) error
 }
 
 type Response struct {
     Length int64
-    Body   io.Reader
+    Write  func(w io.Reader) error
 }
