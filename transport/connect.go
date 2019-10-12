@@ -8,6 +8,7 @@ package transport
 
 import (
     "citron-repo/ioutil"
+    "citron-repo/util"
     "github.com/xfali/goutils/log"
     "net"
     "sync"
@@ -18,15 +19,17 @@ type ConnConfig struct {
     readTimeout  time.Duration
     writeTimeout time.Duration
 
-    factory ProcessorFactory
+    observer Observer
+    factory  ProcessorFactory
 }
 
 type Connect struct {
     conn     net.Conn
-    stopChan chan bool
+    stopChan util.Closable
     wait     sync.WaitGroup
 
     p Processor
+    o []Observer
 
     //read timeout
     rt time.Duration
@@ -38,7 +41,7 @@ func NewConnect(conf ConnConfig, conn net.Conn) *Connect {
     p := conf.factory()
     ret := Connect{
         conn:     conn,
-        stopChan: make(chan bool),
+        stopChan: util.NewSafeCloseChan(),
         p:        p,
         rt:       conf.readTimeout,
         wt:       conf.writeTimeout,
@@ -58,6 +61,11 @@ func (c *Connect) ProcessLoop() {
     c.wait.Wait()
     log.Info("connect closed %v", c.conn.RemoteAddr())
     c.conn.Close()
+    c.notifyClose()
+}
+
+func (c *Connect) RegisterObserver(o Observer) {
+    c.o = append(c.o, o)
 }
 
 func (c *Connect) ReadLoop() {
@@ -75,16 +83,16 @@ func (c *Connect) ReadLoop() {
         if err != nil {
             log.Error(err.Error())
             //exit goroutine
-            close(c.stopChan)
+            c.stopChan.Close()
             return
         }
 
         log.Debug("read %s %d", string(data[:n]), ioutil.GetGoroutineID())
 
         select {
-        case <-c.stopChan:
+        case <-c.stopChan.C():
             return
-        case <-c.p.CloseChan():
+        case <-c.p.Closer().C():
             return
         case c.p.ReadChan() <- data[:n]:
             break
@@ -101,9 +109,9 @@ func (c *Connect) WriteLoop() {
     for {
         var d []byte
         select {
-        case <-c.stopChan:
+        case <-c.stopChan.C():
             return
-        case <-c.p.CloseChan():
+        case <-c.p.Closer().C():
             return
         case d = <-c.p.WriteChan():
             break
@@ -116,7 +124,7 @@ func (c *Connect) WriteLoop() {
         if err != nil {
             log.Error(err.Error())
             //exit goroutine
-            close(c.stopChan)
+            c.stopChan.Close()
             break
         }
         log.Debug("write %s", string(d[:n]))
@@ -125,6 +133,15 @@ func (c *Connect) WriteLoop() {
     }
 }
 
-func (c *Connect) Close() {
-    close(c.stopChan)
+func (c *Connect) Close() error {
+    c.stopChan.Close()
+    return nil
+}
+
+func (c *Connect) notifyClose() {
+    for _, o := range c.o {
+        o.NotifyClosed(c)
+    }
+    //close processor
+    c.p.Closer().Close()
 }

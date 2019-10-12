@@ -10,6 +10,7 @@ import (
     "bytes"
     "citron-repo/ioutil"
     "citron-repo/protocol"
+    "citron-repo/util"
     "encoding/binary"
     "errors"
     "fmt"
@@ -36,7 +37,7 @@ type connConf struct {
 
 type BinaryServer struct {
     transport *TcpTransport
-    connList  []*binaryConn
+    connMap   sync.Map
 
     conf connConf
 }
@@ -44,12 +45,13 @@ type BinaryServer struct {
 type binaryConn struct {
     readChan  chan []byte
     writeChan chan []byte
-    stopChan  chan bool
+    stopChan  util.Closable
 
     readBufPool  sync.Pool
     writeBufPool sync.Pool
 
     conf connConf
+    o    Observer
 }
 
 type PackageWriter func(size int64, reader io.Reader) error
@@ -125,6 +127,10 @@ func NewBinaryServer(opts ...BinOpt) *BinaryServer {
     return &s
 }
 
+func (s *BinaryServer) NotifyClosed(closer io.Closer) {
+    s.connMap.Delete(closer)
+}
+
 func (s *BinaryServer) ListenAndServe() {
     s.transport.ListenAndServe()
 }
@@ -133,7 +139,7 @@ func (s *BinaryServer) createListener() Processor {
     c := &binaryConn{
         readChan:  make(chan []byte),
         writeChan: make(chan []byte),
-        stopChan:  make(chan bool),
+        stopChan:  util.NewSafeCloseChan(),
 
         readBufPool: sync.Pool{New: func() interface{} {
             return make([]byte, s.conf.readBufSize)
@@ -142,21 +148,25 @@ func (s *BinaryServer) createListener() Processor {
             return make([]byte, s.conf.writeBufSize)
         }},
         conf: s.conf,
+        o:    s,
     }
-    s.connList = append(s.connList, c)
+    s.connMap.Store(c, c)
     go c.process(s.conf)
     return c
 }
 
 func (s *BinaryServer) Close() error {
-    for _, v := range s.connList {
-        v.Close()
-    }
+    s.connMap.Range(func(key, value interface{}) bool {
+        key.(*binaryConn).Close()
+        s.connMap.Delete(key)
+        return true
+    })
+
     return s.transport.Close()
 }
 
 func (c *binaryConn) Close() error {
-    close(c.stopChan)
+    c.stopChan.Close()
     return nil
 }
 
@@ -168,12 +178,17 @@ func (c *binaryConn) WriteChan() <-chan []byte {
     return c.writeChan
 }
 
-func (c *binaryConn) CloseChan() <-chan bool {
+func (c *binaryConn) Closer() util.Closable {
     return c.stopChan
 }
 
 var readCount int32 = 0
 var writeCount int32 = 0
+
+//use Closable instead
+//func (c *binaryConn) NotifyClosed(closer io.Closer) {
+//    c.Close()
+//}
 
 func (c *binaryConn) AcquireReadBuf() []byte {
     atomic.AddInt32(&readCount, 1)
@@ -207,16 +222,17 @@ func (c *binaryConn) process(conf connConf) {
         requestHandler: conf.requestHandler,
     }
 
+    defer c.o.NotifyClosed(c)
     for {
         select {
-        case <-c.stopChan:
+        case <-c.stopChan.C():
             return
         case d := <-c.readChan:
             log.Debug("receive : %s", string(d))
             err := pkg.next(d)
             c.ReleaseReadBuf(d)
             if err != nil {
-                close(c.stopChan)
+                c.stopChan.Close()
                 return
             }
             //s.writeChan <- []byte("server reply: " + string(d))

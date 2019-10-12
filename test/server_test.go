@@ -10,10 +10,13 @@ import (
     "bytes"
     "citron-repo/client"
     "citron-repo/transport"
+    "citron-repo/util"
     "fmt"
     "github.com/xfali/goutils/log"
     "os"
+    "sync"
     "testing"
+    "time"
 )
 
 func TestServer(t *testing.T) {
@@ -33,4 +36,25 @@ func TestClient(t *testing.T) {
             c.Receive(os.Stdout)
         }
     }
+}
+
+func TestClose(t *testing.T) {
+    x := util.NewSafeCloseChan()
+    w := sync.WaitGroup{}
+    w.Add(1)
+    go func() {
+        defer w.Done()
+        select {
+        case <- x.C():
+            return
+        }
+    }()
+
+    <- time.NewTimer(time.Second).C
+    t.Log(x.Close())
+    t.Log(x.Close())
+    t.Log(x.Close())
+
+    w.Wait()
+    t.Log("done")
 }

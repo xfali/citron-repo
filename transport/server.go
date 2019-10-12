@@ -7,9 +7,12 @@
 package transport
 
 import (
+    "citron-repo/util"
     "context"
     "github.com/xfali/goutils/log"
+    "io"
     "net"
+    "sync"
     "time"
 )
 
@@ -23,7 +26,12 @@ type TcpTransport struct {
     listener net.Listener
     stop     bool
     connConf ConnConfig
-    connList []*Connect
+
+    connMap sync.Map
+}
+
+type Observer interface {
+    NotifyClosed(close io.Closer)
 }
 
 type Processor interface {
@@ -32,7 +40,7 @@ type Processor interface {
     //write channel
     WriteChan() <-chan []byte
     //close channel
-    CloseChan() <-chan bool
+    Closer() util.Closable
 
     //获得读缓存，必须保证获得的buf操作是线程安全的
     AcquireReadBuf() []byte
@@ -51,6 +59,12 @@ type Opt func(*TcpTransport)
 func SetPort(port string) Opt {
     return func(t *TcpTransport) {
         t.port = port
+    }
+}
+
+func SetConfig(conf ConnConfig) Opt {
+    return func(t *TcpTransport) {
+        t.connConf = conf
     }
 }
 
@@ -104,15 +118,23 @@ func (t *TcpTransport) ListenAndServe() error {
 func (t *TcpTransport) Close() error {
     t.stop = true
     err := t.listener.Close()
-    for _, conn := range t.connList {
-        conn.Close()
-    }
+    t.connMap.Range(func(key, value interface{}) bool {
+        key.(*Connect).Close()
+        t.connMap.Delete(key)
+        return true
+    })
     return err
 }
 
 func (t *TcpTransport) handleConnect(ctx context.Context, c net.Conn) {
     conn := NewConnect(t.connConf, c)
-    t.connList = append(t.connList, conn)
+    //observer
+    conn.RegisterObserver(t)
+    t.connMap.Store(conn, conn.conn.RemoteAddr())
     log.Debug("accept %v", c.RemoteAddr())
     go conn.ProcessLoop()
+}
+
+func (t *TcpTransport) NotifyClosed(closer io.Closer) {
+    t.connMap.Delete(closer)
 }
